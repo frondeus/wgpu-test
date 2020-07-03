@@ -5,82 +5,15 @@ use winit::{
 };
 use anyhow::{Result, anyhow};
 use winit::event::{KeyboardInput, ElementState, VirtualKeyCode};
-use cgmath::SquareMatrix;
 
-#[derive(Debug, Copy, Clone)]
-struct Camera {
-    eye: cgmath::Point3<f32>,
-    target: cgmath::Point3<f32>,
-    up: cgmath::Vector3<f32>,
-    aspect: f32,
-    fov: f32,
-}
+mod camera;
+mod uniform;
 
-impl Camera {
-    const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
-        1.0, 0.0, 0.0, 0.0,
-        0.0, 1.0, 0.0, 0.0,
-        0.0, 0.0, 0.5, 0.0,
-        0.0, 0.0, 0.5, 1.0
-    );
+mod input;
 
-    pub fn new(width: f32, height: f32) -> Self {
-        Self {
-            eye: (8.0, 5.0, 7.0).into(),
-            target: (0.0, 0.0, 0.0).into(),
-            up: (0.0, 1.0, 0.0).into(),
-            aspect: width / height,
-            fov: 45.0
-        }
-    }
-
-    fn view_matrix(&self) -> cgmath::Matrix4<f32> {
-        let view = cgmath::Matrix4::look_at(self.eye, self.target, self.up);
-        Self::OPENGL_TO_WGPU_MATRIX * view
-        //view
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-struct UniformData {
-    aspect: f32,
-    fov: f32,
-    view: cgmath::Matrix4<f32>,
-    eye: cgmath::Point3<f32>
-}
-
-impl Default for UniformData {
-    fn default() -> Self {
-        Self {
-            aspect: 8.0/6.0,
-            fov: 45.0,
-            view: cgmath::Matrix4::identity(),
-            eye: (0.0, 0.0, 0.0).into()
-        }
-    }
-}
-
-impl From<Camera> for UniformData {
-    fn from(camera: Camera) -> Self {
-        let mut s = Self::default();
-        s.update(camera);
-        s
-    }
-}
-
-impl UniformData {
-    fn update(&mut self, camera: Camera) {
-        let view = camera.view_matrix();
-        self.aspect = camera.aspect;
-        self.fov = camera.fov;
-        self.eye = camera.eye;
-        self.view = view;
-    }
-}
-
-unsafe impl bytemuck::Pod for UniformData { }
-unsafe impl bytemuck::Zeroable for UniformData { }
+use camera::Camera;
+use uniform::UniformData;
+use input::Input;
 
 async fn run(events: EventLoop<()>, window: Window, swapchain_format: wgpu::TextureFormat) -> Result<()> {
     let size = window.inner_size();
@@ -106,8 +39,7 @@ async fn run(events: EventLoop<()>, window: Window, swapchain_format: wgpu::Text
 
     let mut camera = Camera::new(size.width as f32, size.height as f32);
     let mut uniforms: UniformData = camera.into();
-
-    dbg!(&uniforms);
+    let mut input = Input::new(0.2);
 
     let uniform_buffer = device.create_buffer_with_data(
         bytemuck::cast_slice(&[uniforms]),
@@ -191,8 +123,29 @@ async fn run(events: EventLoop<()>, window: Window, swapchain_format: wgpu::Text
                 sc_desc.width = size.width;
                 sc_desc.height = size.height;
                 swap_chain = device.create_swap_chain(&surface, &sc_desc);
+                camera.resize(size.width as f32, size.height as f32);
             }
             Event::RedrawRequested(_) => {
+                // Update
+                input.update_camera(&mut camera);
+                uniforms.update(camera);
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: None
+                });
+
+                let staging_buffer = device.create_buffer_with_data(
+                    bytemuck::cast_slice(&[uniforms]),
+                    wgpu::BufferUsage::COPY_SRC
+                );
+
+                encoder.copy_buffer_to_buffer(&staging_buffer, 0, &uniform_buffer, 0,
+                                              std::mem::size_of::<UniformData>()
+                                                  as wgpu::BufferAddress
+                );
+
+                queue.submit(&[encoder.finish()]);
+
+                // Render
                 let frame = swap_chain.get_next_texture().unwrap();
                 let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: None
@@ -220,6 +173,10 @@ async fn run(events: EventLoop<()>, window: Window, swapchain_format: wgpu::Text
             | Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 *control_flow = ControlFlow::Exit;
             },
+            Event::WindowEvent { event: WindowEvent::KeyboardInput { input: KeyboardInput { state, virtual_keycode: Some(keycode), ..}, .. }, ..} => {
+                let is_pressed = state == ElementState::Pressed;
+                input.update(is_pressed, keycode);
+            }
             _ => ()
         }
     })
