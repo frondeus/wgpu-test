@@ -7,6 +7,8 @@ It was suprisingly easy to create an app and setup the pipeline.
 
 While it is more verbose than OpenGL (keep in mind my knowledge about OGL is from around 2015) it still feels quite easy and definitely easier than Vulkan ;) 
 
+![screnshot](./screenshot.png)
+
 Keyboard:
 WSAD / Arrow keys = rotate camera
 Space - go forward
